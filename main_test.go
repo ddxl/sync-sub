@@ -17,7 +17,9 @@ func TestLoadConfig(t *testing.T) {
 	path := filepath.Join(dir, "config.yaml")
 	content := `
 sub_url: "https://example.com/sub"
-user_agent: "test-agent/1.0"
+headers:
+  user-agent: "test-agent/1.0"
+  authorization: "Bearer xyz"
 exclude_keywords: ["剩余"]
 exclude_types: ["hysteria2"]
 strip_emoji: true
@@ -36,8 +38,12 @@ cf_domains: ["cloudflare.com"]
 	if cfg.SubURL != "https://example.com/sub" {
 		t.Errorf("SubURL = %q, want %q", cfg.SubURL, "https://example.com/sub")
 	}
-	if cfg.UserAgent != "test-agent/1.0" {
-		t.Errorf("UserAgent = %q, want %q", cfg.UserAgent, "test-agent/1.0")
+	canon := canonicalizeHeaders(cfg.Headers)
+	if canon["User-Agent"] != "test-agent/1.0" {
+		t.Errorf("canonicalized User-Agent = %q, want %q", canon["User-Agent"], "test-agent/1.0")
+	}
+	if canon["Authorization"] != "Bearer xyz" {
+		t.Errorf("canonicalized Authorization = %q, want %q", canon["Authorization"], "Bearer xyz")
 	}
 	if !cfg.StripEmoji {
 		t.Error("StripEmoji = false, want true")
@@ -292,6 +298,9 @@ func TestEndToEnd(t *testing.T) {
 		if r.Header.Get("User-Agent") != "test-agent/1.0" {
 			t.Errorf("User-Agent = %q, want test-agent/1.0", r.Header.Get("User-Agent"))
 		}
+		if r.Header.Get("Authorization") != "Bearer xyz" {
+			t.Errorf("Authorization = %q, want Bearer xyz", r.Header.Get("Authorization"))
+		}
 		w.Write([]byte(`
 proxies:
   - name: "🇭🇰 香港 01"
@@ -318,7 +327,9 @@ proxies:
 	configPath := filepath.Join(dir, "config.yaml")
 	cfgContent := `
 sub_url: "` + srv.URL + `"
-user_agent: "test-agent/1.0"
+headers:
+  user-agent: "test-agent/1.0"
+  authorization: "Bearer xyz"
 exclude_keywords: ["剩余"]
 exclude_types: ["trojan"]
 strip_emoji: true
@@ -342,7 +353,7 @@ inject:
 	}
 
 	cfg, _ := loadConfig(configPath)
-	client := &http.Client{Transport: &userAgentTransport{rt: &http.Transport{Proxy: http.ProxyFromEnvironment}, ua: "test-agent/1.0"}}
+	client := &http.Client{Transport: &headerTransport{rt: &http.Transport{Proxy: http.ProxyFromEnvironment}, headers: canonicalizeHeaders(cfg.Headers)}}
 	body, _ := fetchSub(client, cfg.SubURL)
 	var sub map[string]any
 	yaml.Unmarshal(body, &sub)
@@ -375,7 +386,7 @@ inject:
 	rules = append(rules, toAnySlice(output["rules"])...)
 	output["rules"] = rules
 
-	final, _ := yaml.Marshal(output)
+	final, _ := marshalOutput(output)
 	finalStr := string(final)
 
 	// 断言
@@ -399,6 +410,23 @@ inject:
 	}
 	if !strings.Contains(finalStr, "MATCH,Proxy") {
 		t.Errorf("inject rules missing: %s", finalStr)
+	}
+	// 缩进断言:每行缩进必须是 2 的倍数,且存在 2 空格缩进的行
+	hasTwoSpaceIndent := false
+	for _, line := range strings.Split(finalStr, "\n") {
+		if line == "" {
+			continue
+		}
+		indent := len(line) - len(strings.TrimLeft(line, " "))
+		if indent%2 != 0 {
+			t.Errorf("odd indentation (%d spaces): %q", indent, line)
+		}
+		if indent == 2 {
+			hasTwoSpaceIndent = true
+		}
+	}
+	if !hasTwoSpaceIndent {
+		t.Errorf("no 2-space indented lines in output:\n%s", finalStr)
 	}
 
 	// 结构断言：hosts 通配条目、rules 顺序、proxy-groups proxies 内容

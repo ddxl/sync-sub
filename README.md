@@ -43,7 +43,8 @@ $env:CGO_ENABLED=0; go build -trimpath -ldflags "-s -w" -o sync-sub.exe .
 ```yaml
 sub_url: "https://example.com/sub?token=xxx" # mihomo 订阅地址
 output: "out.yaml" # 可选；不设置则输出到 stdout
-user_agent: "clash-verge/v1.0" # 可选；请求订阅时的 User-Agent，默认 clash-verge/v1.0
+headers: # 可选；请求订阅时附加的自定义请求头，未配置 User-Agent 时默认 clash-verge/v1.0
+  User-Agent: "clash-verge/v1.0"
 cf_ip: "104.16.0.1" # 可选；CF 优选 IP，cf_replace_server 和 cf_domains 共用
 exclude_keywords: # 可选；代理名含任一关键词即剔除
   - "剩余"

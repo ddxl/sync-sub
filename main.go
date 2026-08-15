@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"cmp"
 	"fmt"
 	"io"
@@ -20,26 +21,38 @@ const placeholder = "__SUBSCRIBED__"
 var emojiRe = regexp.MustCompile(`[\x{1F000}-\x{1FAFF}\x{2600}-\x{27BF}\x{2B00}-\x{2BFF}\x{1F1E6}-\x{1F1FF}\x{200D}\x{2300}-\x{23FF}\x{2B50}\x{2190}-\x{21FF}\x{FE00}-\x{FE0F}]`)
 
 type Config struct {
-	SubURL          string           `yaml:"sub_url"`
-	Output          string           `yaml:"output"`
-	UserAgent       string           `yaml:"user_agent"`
-	CFIP            string           `yaml:"cf_ip"`
-	ExcludeKeywords []string         `yaml:"exclude_keywords"`
-	ExcludeTypes    []string         `yaml:"exclude_types"`
-	ExtraProxies    []map[string]any `yaml:"extra_proxies"`
-	CFReplaceServer []string         `yaml:"cf_replace_server"`
-	CFDomains       []string         `yaml:"cf_domains"`
-	StripEmoji      bool             `yaml:"strip_emoji"`
-	Inject          map[string]any   `yaml:"inject"`
+	SubURL          string            `yaml:"sub_url"`
+	Output          string            `yaml:"output"`
+	Headers         map[string]string `yaml:"headers"`
+	CFIP            string            `yaml:"cf_ip"`
+	ExcludeKeywords []string          `yaml:"exclude_keywords"`
+	ExcludeTypes    []string          `yaml:"exclude_types"`
+	ExtraProxies    []map[string]any  `yaml:"extra_proxies"`
+	CFReplaceServer []string          `yaml:"cf_replace_server"`
+	CFDomains       []string          `yaml:"cf_domains"`
+	StripEmoji      bool              `yaml:"strip_emoji"`
+	Inject          map[string]any    `yaml:"inject"`
 }
 
-type userAgentTransport struct {
-	rt http.RoundTripper
-	ua string
+type headerTransport struct {
+	rt      http.RoundTripper
+	headers map[string]string
 }
 
-func (t *userAgentTransport) RoundTrip(r *http.Request) (*http.Response, error) {
-	r.Header.Set("User-Agent", t.ua)
+// canonicalizeHeaders 用 http.Header 的规范形式（首字母大写）统一键名，
+// 避免 user-agent / user-Agent 等大小写变体查不到
+func canonicalizeHeaders(h map[string]string) map[string]string {
+	out := make(map[string]string, len(h))
+	for k, v := range h {
+		out[http.CanonicalHeaderKey(k)] = v
+	}
+	return out
+}
+
+func (t *headerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	for k, v := range t.headers {
+		r.Header.Set(k, v)
+	}
 	return t.rt.RoundTrip(r)
 }
 
@@ -224,9 +237,9 @@ var proxyOrder = []string{"name", "type", "server", "port"}
 
 // orderedMap 按指定顺序输出字段：prependKeys 最先，appendKeys 最后，其余按字母序
 type orderedMap struct {
-	m            map[string]any
-	prependKeys  []string
-	appendKeys   []string
+	m           map[string]any
+	prependKeys []string
+	appendKeys  []string
 }
 
 func (o orderedMap) MarshalYAML() (any, error) {
@@ -272,6 +285,20 @@ func (o orderedMap) MarshalYAML() (any, error) {
 	return node, nil
 }
 
+// marshalOutput 用 2 空格缩进序列化,去掉 yaml.Encoder 的文档头
+func marshalOutput(output map[string]any) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	if err := enc.Encode(output); err != nil {
+		return nil, err
+	}
+	if err := enc.Close(); err != nil {
+		return nil, err
+	}
+	return bytes.TrimPrefix(buf.Bytes(), []byte("---\n")), nil
+}
+
 func main() {
 	configPath := cmp.Or(os.Getenv("CONFIG_PATH"), "config.yaml")
 	cfg, err := loadConfig(configPath)
@@ -279,12 +306,16 @@ func main() {
 		fatal(err)
 	}
 
+	headers := canonicalizeHeaders(cfg.Headers)
+	if _, ok := headers["User-Agent"]; !ok {
+		headers["User-Agent"] = "clash-verge/v1.0"
+	}
 	client := &http.Client{
-		Transport: &userAgentTransport{
+		Transport: &headerTransport{
 			rt: &http.Transport{
 				Proxy: http.ProxyFromEnvironment,
 			},
-			ua: cmp.Or(cfg.UserAgent, "clash-verge/v1.0"),
+			headers: headers,
 		},
 	}
 
@@ -342,7 +373,7 @@ func main() {
 		output["rules"] = rules
 	}
 
-	out, err := yaml.Marshal(output)
+	out, err := marshalOutput(output)
 	if err != nil {
 		fatal(fmt.Errorf("序列化输出: %w", err))
 	}
