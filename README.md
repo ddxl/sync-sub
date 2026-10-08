@@ -42,6 +42,7 @@ $env:CGO_ENABLED=0; go build -trimpath -ldflags "-s -w" -o sync-sub.exe .
 
 ```yaml
 sub_url: "https://example.com/sub?token=xxx" # mihomo 订阅地址
+# sub_ip: "1.2.3.4" # 连接 example.com 时将直接请求 1.2.3.4，SNI 依然保持为 example.com
 output: "out.yaml" # 可选；不设置则输出到 stdout
 headers: # 可选；请求订阅时附加的自定义请求头，未配置 User-Agent 时默认 clash-verge/v1.0
   User-Agent: "clash-verge/v1.0"

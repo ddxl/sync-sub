@@ -3,14 +3,18 @@ package main
 import (
 	"bytes"
 	"cmp"
+	"context"
 	"fmt"
 	"io"
 	"maps"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -29,6 +33,7 @@ var emojiRe = regexp.MustCompile(`[\x{1F000}-\x{1FAFF}\x{2600}-\x{27BF}\x{2B00}-
 
 type Config struct {
 	SubURL          string            `yaml:"sub_url"`
+	SubIP           string            `yaml:"sub_ip"`
 	Output          string            `yaml:"output"`
 	Headers         map[string]string `yaml:"headers"`
 	CFIP            string            `yaml:"cf_ip"`
@@ -521,11 +526,37 @@ func main() {
 	if _, ok := headers["User-Agent"]; !ok {
 		headers["User-Agent"] = "clash-verge/v1.0"
 	}
+
+	dialer := &net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}
+
+	baseTransport := &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+	}
+
+	// 如果指定了 sub_ip，重定向 sub_url 域名的 TCP 目标地址
+	subIP := strings.TrimSpace(cfg.SubIP)
+	if subIP != "" {
+		parsedURL, err := url.Parse(cfg.SubURL)
+		if err != nil {
+			fatal(fmt.Errorf("解析 sub_url 失败: %w", err))
+		}
+		targetHost := parsedURL.Hostname()
+
+		baseTransport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			host, port, err := net.SplitHostPort(addr)
+			if err == nil && strings.EqualFold(host, targetHost) {
+				addr = net.JoinHostPort(subIP, port)
+			}
+			return dialer.DialContext(ctx, network, addr)
+		}
+	}
+
 	client := &http.Client{
 		Transport: &headerTransport{
-			rt: &http.Transport{
-				Proxy: http.ProxyFromEnvironment,
-			},
+			rt:      baseTransport,
 			headers: headers,
 		},
 	}
